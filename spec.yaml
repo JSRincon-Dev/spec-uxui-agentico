@@ -1,0 +1,307 @@
+# ==============================================================================
+# SPECIFICATION CONTRACT: AGENTE REDACTOR DE HISTORIAS DE USUARIO (UX-1)
+# Metodología: Spec-Driven Development (SDD)
+# Institución: UNIMINUTO - Vicerrectoría General de Transformación Digital (DTSI)
+# Fuente única de verdad (Single Source of Truth)
+# ==============================================================================
+spec_version: "1.3.0"
+agent_id: "ux-1-historias-usuario"
+name: "Agente Redactor de Historias de Usuario"
+description: >
+  Recibe requerimientos en lenguaje natural y los transforma en Historias de Usuario
+  estructuradas en formato INVEST con alineación SAFe, validadas contra el catálogo
+  consolidado de épicas en Qdrant y auditadas obligatoriamente bajo criterios Gherkin
+  antes de exportarse a la plantilla institucional FR-FT-GTI-02.
+
+# ------------------------------------------------------------------------------
+# 1. GOBERNANZA Y FUENTE ÚNICA DE VERDAD (GIT / BANKAI)
+# ------------------------------------------------------------------------------
+governance:
+  repository: "https://bankai.uniminuto.edu/UNIMINUTO-DESARROLLO/spec-uxui-agentico.git"
+  file_path: "specs/ux-1-historias-usuario.spec.yaml"
+  branch: "main"
+  status: "ACTIVE"
+  approvers:
+    required: true
+    roles:
+      - "Líder de Negocio y UX"
+      - "Comité ARB (Arquitectura) ante cambios de esquema I/O"
+  change_policy: >
+    Cualquier modificación a este contrato versionado dispara la regeneración
+    automática del System Prompt y la revalidación de tests en n8n. Queda prohibida
+    la edición manual de prompts dentro de los nodos en producción.
+
+# ------------------------------------------------------------------------------
+# 2. TRIGGER / DESENCADENADOR
+# ------------------------------------------------------------------------------
+trigger:
+  type: "webhook"
+  protocol: "HTTP"
+  method: "POST"
+  endpoint: "/webhook/v1/ux/redactar-historia"
+  authentication: "Header-Auth (X-UNIMINUTO-API-KEY)"
+  source: "Formulario institucional o correo reenviado de vicerrectorías / facultades"
+
+# ------------------------------------------------------------------------------
+# 3. ENRUTAMIENTO TRANSPARENTE DE MODELO (SINGLE ENDPOINT / LITELLM PROXY)
+# ------------------------------------------------------------------------------
+model_routing:
+  single_endpoint:
+    base_url: "http://litellm-proxy.internal:4000/v1"
+    endpoint: "/chat/completions"
+    api_format: "OpenAI-Compatible"
+    auth_header: "Bearer sk-uniminuto-litellm-master-key"
+    note: >
+      n8n consulta este único endpoint sin alterar la topología del workflow.
+      El campo 'model' de la petición a LiteLLM se mapea con el valor de 'model_tier'.
+  
+  # Campo clave consumido por n8n:
+  tiers:
+    default:
+      model_tier: "tier-default"
+      underlying_target: "ollama/qwen3-8b"
+      environment: "local-on-prem"
+      cost_per_token: 0.00
+      purpose: "Generación del borrador inicial y consulta RAG sobre Qdrant"
+      
+    premium_escalation:
+      model_tier: "tier-premium"
+      underlying_target: "anthropic/claude-3-haiku-20240307"
+      environment: "cloud-api-selective"
+      cost_per_token: "pago_por_uso_selectivo"
+      purpose: "Pulido final de redacción, cohesión y narrativa para historias de alta prioridad"
+
+  # Regla que define qué valor toma model_tier en n8n:
+  resolution_rule: >
+    if (input.prioridad == 'alta' || input.escalar_a_claude == true) {
+      return { model_tier: 'tier-premium' };
+    } else {
+      return { model_tier: 'tier-default' };
+    }
+
+  fallback_policy:
+    on_error: ["tier-premium"]
+    fallback_to: "tier-default"
+    action: "Ejecutar 100% en Qwen3-8B local ante falta de cuota o indisponibilidad externa"
+
+# ------------------------------------------------------------------------------
+# 4. CONTRATO DE ENTRADA Y SALIDA (I/O SCHEMAS)
+# ------------------------------------------------------------------------------
+io_contract:
+  input_schema:
+    type: "object"
+    required:
+      - "texto_requerimiento"
+      - "area_solicitante"
+    properties:
+      texto_requerimiento:
+        type: "string"
+        minLength: 15
+        description: "Requerimiento funcional expresado en texto libre"
+      area_solicitante:
+        type: "string"
+        description: "Vicerrectoría, decanatura o unidad académica solicitante"
+      sistema_afectado:
+        type: "string"
+        default: "Por determinar"
+        description: "Plataforma impactada (Banner, Canvas, Portal, etc.)"
+      prioridad:
+        type: "string"
+        enum: ["baja", "media", "alta"]
+        default: "media"
+        description: "Nivel de criticidad para evaluar escalado de modelo en LiteLLM"
+      escalar_a_claude:
+        type: "boolean"
+        default: false
+
+  output_schema:
+    type: "object"
+    required:
+      - "codigo_requerimiento"
+      - "historia_usuario"
+      - "criterios_aceptacion"
+      - "epica_sugerida"
+      - "feature_sugerida"
+      - "art_asignado"
+      - "auditoria_gherkin"
+      - "plantilla_archivo"
+    properties:
+      codigo_requerimiento:
+        type: "string"
+        pattern: "^REQ-[0-9]{4}-[0-9]{3}$"
+      historia_usuario:
+        type: "object"
+        required: ["como", "quiero", "para"]
+        properties:
+          como:
+            type: "string"
+            description: "Rol del usuario en el entorno universitario (estudiante, docente, etc.)"
+          quiero:
+            type: "string"
+            description: "Acción o capacidad de software requerida"
+          para:
+            type: "string"
+            description: "Beneficio de negocio o valor institucional esperado"
+      criterios_aceptacion:
+        type: "array"
+        minItems: 1
+        maxItems: 4
+        items:
+          type: "object"
+          required: ["escenario", "dado", "cuando", "entonces"]
+          properties:
+            escenario: { type: "string" }
+            dado: { type: "string" }
+            cuando: { type: "string" }
+            entonces: { type: "string" }
+      epica_sugerida:
+        type: "string"
+        description: "Nombre exacto de la épica indexada en el catálogo consolidado de Qdrant"
+      feature_sugerida:
+        type: "string"
+      art_asignado:
+        type: "string"
+        description: "Agile Release Train responsable en la DTSI"
+      auditoria_gherkin:
+        type: "object"
+        required: ["aprobado", "escenarios_evaluados", "observaciones"]
+        properties:
+          aprobado: { type: "boolean" }
+          escenarios_evaluados: { type: "integer" }
+          observaciones: { type: "array", items: { type: "string" } }
+      plantilla_archivo:
+        type: "string"
+        const: "FR-FT-GTI-02"
+        description: "Formato institucional para escribir en la carpeta DTSI vía Microsoft Graph API"
+
+# ------------------------------------------------------------------------------
+# 5. GUARDARRAÍLES Y AUDITORÍA ESTRICTA (GATEWAYS EN N8N)
+# ------------------------------------------------------------------------------
+guardrails:
+  hard_rules:
+    - id: "GR-01-AUDITORIA-GHERKIN"
+      name: "Gateway de Auditoría Gherkin Mandatorio"
+      description: >
+        La historia generada no se publica ni se convierte en Excel si no aprueba
+        la auditoría. Criterios obligatorios:
+        1. Formato de historia: 'como', 'quiero' y 'para' con longitud >= 5 caracteres.
+        2. Al menos un (1) criterio de aceptación en Gherkin.
+        3. Cláusulas 'dado', 'cuando' y 'entonces' presentes y no vacías en cada escenario.
+        4. Prohibido el uso de placeholders ('TBD', 'N/A', '[completar]').
+      action_on_fail: "SET_APROBADO_FALSE_AND_ROUTE_TO_UX_LEAD"
+
+    - id: "GR-02-EXISTENCIA-EPICA-QDRANT"
+      name: "Validación contra Catálogo Consolidado de Épicas"
+      description: >
+        La 'epica_sugerida' debe existir en la colección 'catalogo_epicas' de Qdrant
+        con score de similitud >= 0.82. Si no existe, no se genera el archivo.
+      action_on_fail: "SET_APROBADO_FALSE_AND_ROUTE_TO_UX_LEAD"
+
+# ------------------------------------------------------------------------------
+# 6. CRITERIOS DE ACEPTACIÓN EN GHERKIN (PRUEBAS DE REGRESIÓN DE LA SPEC)
+# ------------------------------------------------------------------------------
+acceptance_criteria:
+  - id: "CA-01-EXITO-COMPLETO"
+    scenario: "Generación exitosa con auditoría Gherkin aprobada y épica existente"
+    given: >
+      Un requerimiento en texto libre con área solicitante identificada
+      y un catálogo consolidado de épicas indexado en Qdrant
+    when: "El agente genera la historia mediante el endpoint LiteLLM"
+    then: >
+      El resultado incluye formato Como/Quiero/Para,
+      al menos un criterio en Gherkin con sus cláusulas Dado, Cuando y Entonces,
+      una épica sugerida que existe en el backlog indexado,
+      y auditoria_gherkin.aprobado es igual a true,
+      permitiendo la creación del archivo FR-FT-GTI-02 en la carpeta DTSI.
+
+  - id: "CA-02-BLOQUEO-AUDITORIA-GHERKIN"
+    scenario: "Rechazo y desvío humano por criterio de aceptación sin estructura Gherkin completa"
+    given: "Un requerimiento procesado cuyo borrador omite la cláusula 'Entonces' o contiene 'TBD'"
+    when: "El nodo de auditoría en n8n evalúa el payload de salida"
+    then: >
+      El nodo marca auditoria_gherkin.aprobado = false,
+      el workflow bloquea la llamada a Microsoft Graph API,
+      y desvía el caso a la bandeja de revisión humana del Líder de UX.
+
+  - id: "CA-03-BLOQUEO-EPICA-INEXISTENTE"
+    scenario: "Rechazo y desvío humano por épica no encontrada en Qdrant"
+    given: "Un requerimiento funcional cuya épica sugerida no existe en el catálogo indexado"
+    when: "El flujo verifica la similitud semántica contra Qdrant"
+    then: >
+      El nodo marca auditoria_gherkin.aprobado = false,
+      se suspende la escritura del Excel FR-FT-GTI-02,
+      y se notifica al Líder de UX para catalogar la épica.
+
+  - id: "CA-04-ENRUTAMIENTO-TRANSPARENTE-LITELLM"
+    scenario: "Selección de modelo sin cambiar la topología del flujo"
+    given: "Un requerimiento con prioridad 'alta'"
+    when: "n8n invoca el endpoint único http://litellm-proxy.internal:4000/v1/chat/completions"
+    then: >
+      El payload envía model = 'tier-premium',
+      LiteLLM procesa la petición en Claude 3 Haiku,
+      y el workflow conserva el mismo esquema de respuesta que en ejecuciones con Qwen3-8B local.
+
+# ------------------------------------------------------------------------------
+# 7. PUBLICACIÓN Y NOTIFICACIÓN (DOBLE DESTINO)
+# ------------------------------------------------------------------------------
+# Confirmado con el Líder de UX (2026-09-16): el resultado tiene dos destinos,
+# no uno. No se contempla integración con un tablero de sprints de terceros.
+publication:
+  targets:
+    - id: "PUB-01-ARCHIVO-DTSI"
+      type: "file"
+      description: >
+        Archivo con plantilla institucional FR-FT-GTI-02, escrito en la carpeta
+        compartida "G-Proyectos DTSI - Requerimientos" vía Microsoft Graph API
+        (cuenta genérica de servicio, en aprovisionamiento por TI).
+    - id: "PUB-02-CORREO-LIDER-UX"
+      type: "email"
+      method: "SMTP / Outlook (nodo n8n, misma cuenta genérica)"
+      recipient: "Líder de Negocio y Experiencia de Usuario"
+      purpose: >
+        Durante el piloto (cierre humano obligatorio), este correo es el punto
+        de revisión: el Líder de UX aprueba o corrige la historia antes de
+        darla por definitiva. Deja de ser un gate y pasa a ser solo
+        notificación una vez el piloto sostenga 4 semanas sin incidentes.
+  excluded_targets:
+    - name: "Trello"
+      reason: >
+        El ART no tiene hoy una convención consistente para representar
+        épicas en Trello (ni labels, ni listas, ni tableros fijos por
+        épica), y las tarjetas de Trello no siempre coinciden con los
+        archivos .xlsx de la carpeta DTSI. No se integra hasta que exista
+        esa convención — evaluar de nuevo si el ART la define.
+
+# ------------------------------------------------------------------------------
+# 8. EJEMPLO DE REFERENCIA (CASO REAL, CARPETA DTSI)
+# ------------------------------------------------------------------------------
+# Tomado de un requerimiento ya redactado, no hipotético — punto de partida
+# para que el Líder de UX valide el contrato con casos reales adicionales.
+reference_example:
+  source_file: "Requerimiento habilitación url para autenticación.xlsx"
+  input:
+    texto_requerimiento: >
+      Se requiere habilitar una nueva URL autorizada en el servicio de OAuth
+      de Uniminuto que permita completar el proceso de autenticación desde
+      una nueva interfaz a la Liga SAPIENS, la cual unifica el acceso a los
+      distintos bots institucionales en una plataforma.
+    area_solicitante: "Lidarit y Vicerrectoría Académica"
+    prioridad: "alta"
+  expected_output:
+    historia_usuario:
+      como: "Usuario de Uniminuto"
+      quiero: >
+        completar el proceso de autenticación mediante el servicio de OAuth
+        desde la URL https://liga-sapiens.aitopstaff.com
+      para: "ingresar a Liga SAPIENS"
+    criterios_aceptacion_muestra:
+      - "El dominio https://liga-sapiens.aitopstaff.com se encuentra incluido en la lista de dominios autorizados del OAuth de Uniminuto."
+      - "Los usuarios pueden autenticarse correctamente desde el dominio sin errores de autorización."
+      - "No se afecta la autenticación desde los dominios previamente autorizados."
+    epica_sugerida: "PENDIENTE_DE_CONSOLIDACION"
+  open_question: >
+    ¿Esta iniciativa pertenece a la misma épica que "Gestión de dominios y
+    acceso institucional" (HU_Gestión de dominios SAPIENS.xlsx, mismo
+    proyecto Lidarit/Liga SAPIENS) o son épicas distintas? Este es
+    exactamente el tipo de duplicidad que el catálogo consolidado de épicas
+    debe resolver antes de que GR-02-EXISTENCIA-EPICA-QDRANT sea confiable.
