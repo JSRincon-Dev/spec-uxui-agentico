@@ -4,7 +4,7 @@
 # Institución: UNIMINUTO - Vicerrectoría General de Transformación Digital (DTSI)
 # Fuente única de verdad (Single Source of Truth)
 # ==============================================================================
-spec_version: "1.3.0"
+spec_version: "1.4.0"
 agent_id: "ux-1-historias-usuario"
 name: "Agente Redactor de Historias de Usuario"
 description: >
@@ -54,7 +54,59 @@ model_routing:
     note: >
       n8n consulta este único endpoint sin alterar la topología del workflow.
       El campo 'model' de la petición a LiteLLM se mapea con el valor de 'model_tier'.
-  
+
+  # NUEVO (v1.4.0): Validación inteligente de prioridad
+  priority_validation:
+    enabled: true
+    description: >
+      Antes de decidir el tier, valida si el usuario tiene razón al marcar "alta".
+      Esto evita escalar innecesariamente a modelos costosos.
+    strategy: "llm-based-verification"
+    validator_model: "tier-default"
+    validator_description: >
+      Usa Ollama qwen3-8b (tier-default, gratis) para validar la prioridad
+      marcada por el usuario, sin escalar a modelo premium.
+
+    validator_prompt: >
+      Analiza este requerimiento institucional y valida si la prioridad marcada
+      por el usuario es correcta. Responde SOLO con una palabra: "alta", "media" o "baja".
+
+      Requerimiento: {texto_requerimiento}
+      Área solicitante: {area_solicitante}
+      Prioridad marcada por usuario: {prioridad}
+
+      Criterios para "alta": impacto crítico, usuarios bloqueados, incumplimiento normativo.
+      Criterios para "media": impacto moderado, mejora operacional, afecta flujo parcial.
+      Criterios para "baja": mejora cosmética, optimización, no hay usuarios bloqueados.
+
+      IMPORTANTE: Nunca subes la prioridad, solo confirma o rebaja.
+      Responde SOLO: alta | media | baja
+
+    rules:
+      - id: "PV-01-VALIDAR-SI-MARCA-ALTA"
+        description: "Si usuario marca 'alta', validar con Ollama"
+        condition: "input.prioridad == 'alta'"
+        action: "call_validator_model"
+        outcomes:
+          - when_validator_returns: "alta"
+            then: "prioridad_validada = 'alta'"
+          - when_validator_returns: "media"
+            then: "prioridad_validada = 'media'"
+          - when_validator_returns: "baja"
+            then: "prioridad_validada = 'baja'"
+
+      - id: "PV-02-PASAR-SI-NO-MARCA-ALTA"
+        description: "Si usuario NO marca 'alta', usar prioridad como está"
+        condition: "input.prioridad != 'alta'"
+        action: "use_as_is"
+        result: "prioridad_validada = input.prioridad"
+
+    fallback:
+      on_error: "use_input_prioridad"
+      description: >
+        Si el validador falla (timeout, error de conectividad, etc.),
+        usar la prioridad marcada por el usuario. Se registra el error en logs.
+
   # Campo clave consumido por n8n:
   tiers:
     default:
@@ -62,22 +114,26 @@ model_routing:
       underlying_target: "ollama/qwen3-8b"
       environment: "local-on-prem"
       cost_per_token: 0.00
-      purpose: "Generación del borrador inicial y consulta RAG sobre Qdrant"
-      
+      purpose: "Generación del borrador inicial, validación de prioridad y consulta RAG sobre Qdrant"
+
     premium_escalation:
       model_tier: "tier-premium"
       underlying_target: "anthropic/claude-3-haiku-20240307"
       environment: "cloud-api-selective"
       cost_per_token: "pago_por_uso_selectivo"
-      purpose: "Pulido final de redacción, cohesión y narrativa para historias de alta prioridad"
+      purpose: "Pulido final de redacción, cohesión y narrativa para historias de alta prioridad confirmada"
 
-  # Regla que define qué valor toma model_tier en n8n:
+  # MODIFICADO (v1.4.0): resolution_rule ahora usa prioridad_validada
   resolution_rule: >
-    if (input.prioridad == 'alta' || input.escalar_a_claude == true) {
+    if (prioridad_validada == 'alta' || input.escalar_a_claude == true) {
       return { model_tier: 'tier-premium' };
     } else {
       return { model_tier: 'tier-default' };
     }
+
+  # Nota para n8n: prioridad_validada es el resultado de priority_validation.
+  # Si priority_validation.enabled es false, prioridad_validada = input.prioridad.
+  # El workflow almacena prioridad_validada en "Combinar datos" para acceso posterior.
 
   fallback_policy:
     on_error: ["tier-premium"]
@@ -109,10 +165,11 @@ io_contract:
         type: "string"
         enum: ["baja", "media", "alta"]
         default: "media"
-        description: "Nivel de criticidad para evaluar escalado de modelo en LiteLLM"
+        description: "Nivel de criticidad inicial (será validado por priority_validation si es 'alta')"
       escalar_a_claude:
         type: "boolean"
         default: false
+        description: "Override manual para forzar tier-premium sin importar prioridad_validada"
 
   output_schema:
     type: "object"
@@ -240,6 +297,17 @@ acceptance_criteria:
       El payload envía model = 'tier-premium',
       LiteLLM procesa la petición en Claude 3 Haiku,
       y el workflow conserva el mismo esquema de respuesta que en ejecuciones con Qwen3-8B local.
+
+  - id: "CA-05-VALIDACION-PRIORIDAD"
+    scenario: "Sistema rebaja prioridad si el usuario marca 'alta' sin justificación"
+    given: >
+      Un requerimiento que usuario marca como 'alta' pero que no cumple
+      criterios de impacto crítico (sin usuarios bloqueados, sin incumplimiento normativo)
+    when: "El validador (Ollama) analiza si es verdad alta prioridad"
+    then: >
+      prioridad_validada se establece en 'media' o 'baja',
+      el workflow activa tier-default (Ollama local),
+      evitando escalado innecesario a modelo premium.
 
 # ------------------------------------------------------------------------------
 # 7. PUBLICACIÓN Y NOTIFICACIÓN (DOBLE DESTINO)
