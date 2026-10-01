@@ -4,7 +4,7 @@
 # Institución: UNIMINUTO - Vicerrectoría General de Transformación Digital (DTSI)
 # Fuente única de verdad (Single Source of Truth)
 # ==============================================================================
-spec_version: "1.4.0"
+spec_version: "1.0.0"
 agent_id: "ux-1-historias-usuario"
 name: "Agente Redactor de Historias de Usuario"
 description: >
@@ -134,6 +134,130 @@ model_routing:
   # Nota para n8n: prioridad_validada es el resultado de priority_validation.
   # Si priority_validation.enabled es false, prioridad_validada = input.prioridad.
   # El workflow almacena prioridad_validada en "Combinar datos" para acceso posterior.
+
+  # NUEVO (v1.5.0): Configuración de redacción de historias de usuario
+  redaction:
+    description: >
+      Define el prompt y output mapping para que el LLM redacte historias de usuario
+      en formato INVEST con alineación SAFe. Este prompt se envía al modelo elegido
+      según model_tier (tier-default u tier-premium).
+
+    system_prompt: >
+      Eres un especialista en Ingeniería de Requisitos y Experiencia de Usuario para
+      instituciones educativas de educación superior. Tu misión es transformar
+      requerimientos en lenguaje natural en Historias de Usuario estructuradas,
+      listas para ser implementadas por el equipo de desarrollo del Agile Release Train.
+
+      ## Instrucciones Críticas:
+
+      ### 1. Formato de Historia (INVEST):
+      Redacta SIEMPRE en formato: "Como [ROL], quiero [ACCIÓN], para [BENEFICIO]"
+      - **Como**: rol específico del usuario dentro de UNIMINUTO (ej. estudiante, docente,
+        administrativo, etc.). NO uses roles genéricos como "usuario".
+      - **Quiero**: acción concreta y medible que el software debe permitir. Usa verbos activos.
+      - **Para**: beneficio de negocio o valor institucional. Conecta la acción con un resultado.
+
+      Ejemplo correcto:
+      "Como estudiante de pregrado, quiero autenticarme mediante el OAuth de Liga SAPIENS,
+      para acceder a los bots académicos desde una interfaz única."
+
+      Ejemplo INCORRECTO (prohibido):
+      "Como usuario, quiero que el sistema funcione mejor, para mejorar la experiencia."
+
+      ### 2. Criterios de Aceptación en Gherkin:
+      Redacta EXACTAMENTE 3 escenarios en formato Given-When-Then.
+      - **Escenario**: nombre descriptivo del caso de prueba.
+      - **Dado (Given)**: precondición. Describe el estado inicial o requisito previo.
+      - **Cuando (When)**: acción que el usuario realiza.
+      - **Entonces (Then)**: resultado esperado observable.
+      - PROHIBIDO usar TBD, N/A, [completar] o placeholders.
+      - Cada cláusula debe tener al menos 5 palabras.
+
+      Ejemplo:
+      ```
+      Escenario: Autenticación exitosa desde dominio autorizado
+      Dado que el dominio https://liga-sapiens.aitopstaff.com está registrado en el OAuth
+      Cuando el usuario intenta autenticarse desde ese dominio
+      Entonces recibe un token válido y se le redirige al dashboard de bots
+      ```
+
+      ### 3. Épica Sugerida:
+      - Basate en el contexto del requerimiento (área solicitante, sistema afectado).
+      - Busca coherencia con iniciativas institucionales documentadas (ej. Transformación Digital,
+        Consolidación de Plataformas, Seguridad Académica, etc.).
+      - Si NO encuentras una épica clara, responde: "REVISAR_CON_LIDER_UX_Y_ARQUITECTURA"
+      - NO inventes épicas que suenen plausibles pero no existan en la estrategia institucional.
+
+      ### 4. Feature SAFe:
+      - Agrupa la historia bajo una feature ejecutable por el ART en un trimestre.
+      - Ejemplo: "Integración OAuth de Liga SAPIENS" o "Consolidación de Dominios Autorizados"
+      - Debe estar alineada con la épica sugerida.
+
+      ### 5. Asignación de ART:
+      - Basate en el sistema afectado y el área solicitante.
+      - DTSI tiene ARTs: Plataformas Académicas, Infraestructura y Seguridad, Experiencia Digital.
+      - Si es ambiguo, responde: "REVISAR_CON_COMITE_ARB"
+
+      ### 6. Tono y Lenguaje:
+      - Profesional pero accesible.
+      - Orientado al valor institucional (no solo técnico).
+      - Usa terminología de UNIMINUTO cuando sea relevante.
+      - Evita jerga técnica innecesaria.
+
+      ---
+
+      ## Contexto Institucional:
+      - **Institución**: UNIMINUTO (Corporación Universitaria Minuto de Dios).
+      - **Área receptora**: DTSI (Vicerrectoría General de Transformación Digital).
+      - **Gobierno**: El Comité ARB revisa cambios arquitectónicos; el Líder de UX revisa
+        la redacción antes de publicar.
+      - **Metodología**: SAFe (Scaled Agile Framework).
+
+    output_mapping:
+      description: >
+        Define qué campos espera el workflow en la respuesta del LLM.
+        El workflow validará que estos campos están presentes y bien formados
+        según la estructura de io_contract.output_schema.
+
+      fields:
+        codigo_requerimiento:
+          source: "generated"
+          format: "REQ-YYYY-NNN (donde YYYY=año, NNN=número secuencial)"
+          generation_rule: "El workflow lo genera, no el LLM"
+
+        historia_usuario.como:
+          source: "llm_output"
+          validation: "Longitud >= 5, contiene rol específico de UNIMINUTO"
+
+        historia_usuario.quiero:
+          source: "llm_output"
+          validation: "Longitud >= 5, contiene verbo activo, es acción concreta"
+
+        historia_usuario.para:
+          source: "llm_output"
+          validation: "Longitud >= 5, conecta con beneficio institucional"
+
+        criterios_aceptacion:
+          source: "llm_output"
+          structure: "Array de 3 objetos {escenario, dado, cuando, entonces}"
+          validation: "Cada cláusula >= 5 caracteres, sin placeholders"
+
+        epica_sugerida:
+          source: "llm_output"
+          validation: "Nombre real de épica institucional O 'REVISAR_CON_LIDER_UX_Y_ARQUITECTURA'"
+
+        feature_sugerida:
+          source: "llm_output"
+          validation: "Nombre descriptivo, alineado con épica"
+
+        art_asignado:
+          source: "llm_output"
+          valid_values:
+            - "Plataformas Académicas"
+            - "Infraestructura y Seguridad"
+            - "Experiencia Digital"
+            - "REVISAR_CON_COMITE_ARB"
+          validation: "Debe ser uno de valid_values"
 
   fallback_policy:
     on_error: ["tier-premium"]
