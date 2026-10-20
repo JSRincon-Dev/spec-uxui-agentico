@@ -258,8 +258,8 @@ io_contract:
         type: array
         items:
           type: string
-          default: []
-          description: "Personas que solicitan el requerimiento (campo 'Usuarios solicitantes' del FR-FT-GTI-02)"
+        default: []
+        description: "Personas que solicitan el requerimiento (campo 'Usuarios solicitantes' del FR-FT-GTI-02)"
       escalar_a_claude:
         type: "boolean"
         default: false
