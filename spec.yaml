@@ -228,6 +228,41 @@ model_routing:
     fallback_to: "tier-default"
     action: "Ejecutar 100% en Qwen3-8B local ante falta de cuota o indisponibilidad externa"
 
+  llm_output_schema:
+    description: "Estructura JSON que debe devolver el LLM. El contenido y el estilo salen de las HU reales (RAG); este esquema solo define la forma."
+    type: object
+    required: [nombre_requerimiento, titulo_documento, nombre, conversacion, historia_usuario, reglas_negocio, criterios_aceptacion, epica_sugerida, feature_sugerida, art_asignado]
+    properties:
+      nombre_requerimiento: { type: string, description: "Tema corto, como en el nombre de archivo de las muestras después de 'HU_'" }
+      titulo_documento:     { type: string, description: "Título con la misma forma de las muestras" }
+      nombre:               { type: string, description: "Nombre corto de la HU" }
+      conversacion:         { type: string, description: "Una oración: Como [rol] quiero [acción] para [beneficio]" }
+      historia_usuario:
+        type: object
+        required: [como, quiero, para]
+        properties:
+          como:   { type: string }
+          quiero: { type: string }
+          para:   { type: string }
+      reglas_negocio:       { type: string, description: "Frase de entrada y viñetas, como en las muestras" }
+      criterios_aceptacion:
+        type: array
+        minItems: 3
+        maxItems: 3
+        items:
+          type: object
+          required: [escenario, dado, cuando, entonces]
+          properties:
+            escenario: { type: string }
+            dado:      { type: string }
+            cuando:    { type: string }
+            entonces:  { type: string }
+      epica_sugerida:       { type: string, description: "Una de las épicas candidatas, exactamente igual, o REVISAR_CON_LIDER_UX_Y_ARQUITECTURA" }
+      feature_sugerida:     { type: string }
+      art_asignado:
+        type: string
+        enum: ["Plataformas Académicas", "Infraestructura y Seguridad", "Experiencia Digital", "REVISAR_CON_COMITE_ARB"]
+
 # ------------------------------------------------------------------------------
 # 4. CONTRATO DE ENTRADA Y SALIDA (I/O SCHEMAS)
 # ------------------------------------------------------------------------------
