@@ -382,6 +382,8 @@ guardrails:
         La 'epica_sugerida' debe existir en la colección 'catalogo_epicas' de Qdrant
         con score de similitud >= 0.82. Si no existe, no se genera el archivo.
       action_on_fail: "SET_APROBADO_FALSE_AND_ROUTE_TO_UX_LEAD"
+      collection: "catalogo_epicas"
+      similarity_threshold: 0.82
 
 # ------------------------------------------------------------------------------
 # 6. CRITERIOS DE ACEPTACIÓN EN GHERKIN (PRUEBAS DE REGRESIÓN DE LA SPEC)
@@ -455,6 +457,7 @@ publication:
       type: "email"
       method: "SMTP / Outlook (nodo n8n, misma cuenta genérica)"
       recipient: "Líder de Negocio y Experiencia de Usuario"
+      recipient_email: "agentico_n8n@uniminuto.edu"
       purpose: >
         Durante el piloto (cierre humano obligatorio), este correo es el punto
         de revisión: el Líder de UX aprueba o corrige la historia antes de
